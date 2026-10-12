@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "r7Ky2AR4KlGDGNo5jTAKwe6V/pTHQD9rbAAurUJeTTo=",
+  "Source": "AiLifeOS.Api",
+  "BasePath": "_content/AiLifeOS.Api",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}

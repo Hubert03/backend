@@ -1,0 +1,11 @@
+@AiLifeOS_Api_HostAddress = http://localhost:5090
+
+GET {{AiLifeOS_Api_HostAddress}}/WeatherForecast
+Accept: application/json
+
+###
+
+GET {{AiLifeOS_Api_HostAddress}}/api/health/database
+Accept: application/json
+
+###
