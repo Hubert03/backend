@@ -1,0 +1,15 @@
+﻿bin/
+obj/
+.vs/
+*.user
+*.suo
+*.log
+
+appsettings.Local.json
+appsettings.Development.json
+secrets.json
+.env
+.env.*
+
+TestResults/
+artifacts/
