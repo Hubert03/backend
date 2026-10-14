@@ -14,6 +14,10 @@ public sealed class AiLifeOsDbContext(DbContextOptions<AiLifeOsDbContext> option
     public DbSet<NoteItem> Notes => Set<NoteItem>();
     public DbSet<ActivityLogEntry> ActivityLog => Set<ActivityLogEntry>();
     public DbSet<AiProviderSettings> AiProviderSettings => Set<AiProviderSettings>();
+    public DbSet<UserInvitation> UserInvitations => Set<UserInvitation>();
+    public DbSet<ChatGroup> ChatGroups => Set<ChatGroup>();
+    public DbSet<ChatGroupMember> ChatGroupMembers => Set<ChatGroupMember>();
+    public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -25,6 +29,9 @@ public sealed class AiLifeOsDbContext(DbContextOptions<AiLifeOsDbContext> option
             entity.Property(user => user.CreatedAtUtc)
                 .HasPrecision(0)
                 .HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(user => user.IsAdmin).HasDefaultValue(false);
+            entity.Property(user => user.IsActive).HasDefaultValue(true);
+            entity.Property(user => user.MustChangePassword).HasDefaultValue(false);
             entity.HasIndex(user => user.NormalizedEmail)
                 .IsUnique()
                 .HasFilter("[NormalizedEmail] IS NOT NULL");
@@ -168,6 +175,66 @@ public sealed class AiLifeOsDbContext(DbContextOptions<AiLifeOsDbContext> option
             entity.ToTable(table => table.HasCheckConstraint(
                 "CK_AiProviderSettings_SingleRow",
                 "[SettingsId] = 1"));
+        });
+
+        modelBuilder.Entity<UserInvitation>(entity =>
+        {
+            entity.ToTable("UserInvitations", "dbo");
+            entity.HasKey(invitation => invitation.InvitationId);
+            entity.Property(invitation => invitation.Email).HasMaxLength(320).IsRequired();
+            entity.Property(invitation => invitation.DisplayName).HasMaxLength(100).IsRequired();
+            entity.Property(invitation => invitation.TokenHash).HasMaxLength(32).IsRequired();
+            entity.Property(invitation => invitation.CreatedAtUtc).HasPrecision(0);
+            entity.Property(invitation => invitation.ExpiresAtUtc).HasPrecision(0);
+            entity.Property(invitation => invitation.AcceptedAtUtc).HasPrecision(0);
+            entity.HasIndex(invitation => invitation.TokenHash).IsUnique();
+            entity.HasIndex(invitation => new { invitation.Email, invitation.AcceptedAtUtc });
+        });
+
+        modelBuilder.Entity<ChatGroup>(entity =>
+        {
+            entity.ToTable("ChatGroups", "dbo");
+            entity.HasKey(group => group.GroupId);
+            entity.Property(group => group.Name).HasMaxLength(100).IsRequired();
+            entity.Property(group => group.CreatedAtUtc).HasPrecision(0);
+            entity.Property(group => group.IsArchived).HasDefaultValue(false);
+            entity.HasIndex(group => new { group.IsArchived, group.Name });
+        });
+
+        modelBuilder.Entity<ChatGroupMember>(entity =>
+        {
+            entity.ToTable("ChatGroupMembers", "dbo");
+            entity.HasKey(member => new { member.GroupId, member.UserId });
+            entity.Property(member => member.AddedAtUtc).HasPrecision(0);
+            entity.HasOne<ChatGroup>()
+                .WithMany()
+                .HasForeignKey(member => member.GroupId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<User>()
+                .WithMany()
+                .HasForeignKey(member => member.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(member => new { member.UserId, member.GroupId });
+        });
+
+        modelBuilder.Entity<ChatMessage>(entity =>
+        {
+            entity.ToTable("ChatMessages", "dbo");
+            entity.HasKey(message => message.MessageId);
+            entity.Property(message => message.Content).HasMaxLength(2000).IsRequired();
+            entity.Property(message => message.DisplayName).HasMaxLength(100).IsRequired();
+            entity.Property(message => message.CreatedAtUtc)
+                .HasPrecision(0)
+                .HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasOne<ChatGroup>()
+                .WithMany()
+                .HasForeignKey(message => message.GroupId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<User>()
+                .WithMany()
+                .HasForeignKey(message => message.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(message => new { message.GroupId, message.CreatedAtUtc });
         });
     }
 }

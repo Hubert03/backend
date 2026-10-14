@@ -4,8 +4,12 @@ using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.Data.SqlClient;
 
 namespace AiLifeOS.Api.Controllers;
 
@@ -26,35 +30,60 @@ public sealed class AuthController(
     }
 
     [AllowAnonymous]
-    [HttpPost("register")]
-    public async Task<IActionResult> Register(
-        RegisterRequest request,
+    [HttpPost("accept-invitation")]
+    public async Task<IActionResult> AcceptInvitation(
+        AcceptInvitationRequest request,
         CancellationToken cancellationToken)
     {
         if (!await HasValidCsrfTokenAsync())
-        {
             return BadRequest(new { message = "Invalid or missing anti-forgery token." });
+
+        byte[] tokenBytes;
+        try
+        {
+            tokenBytes = WebEncoders.Base64UrlDecode(request.Token);
+        }
+        catch (FormatException)
+        {
+            return BadRequest(new { message = "This invitation link is invalid or has expired." });
         }
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        if (tokenBytes.Length != 32)
+            return BadRequest(new { message = "This invitation link is invalid or has expired." });
 
-        var email = request.Email.Trim();
+        var tokenHash = SHA256.HashData(Encoding.UTF8.GetBytes(request.Token));
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        List<InvitationDetails> invitations;
+        try
+        {
+            invitations = await dbContext.Database
+                .SqlQuery<InvitationDetails>($"EXEC dbo.UserInvitation_Consume @TokenHash={tokenHash}")
+                .ToListAsync(cancellationToken);
+        }
+        catch (SqlException exception) when (exception.Number == 50022)
+        {
+            return BadRequest(new { message = "This invitation link is invalid, expired, or already used." });
+        }
+
+        var invitation = invitations.SingleOrDefault();
+        if (invitation is null)
+            return BadRequest(new { message = "This invitation link is invalid or has expired." });
+
         var user = new ApplicationUser
         {
-            UserName = email,
-            Email = email,
-            DisplayName = request.DisplayName.Trim(),
-            CreatedAtUtc = DateTime.UtcNow
+            UserName = invitation.Email,
+            Email = invitation.Email,
+            EmailConfirmed = true,
+            DisplayName = invitation.DisplayName,
+            CreatedAtUtc = DateTime.UtcNow,
+            IsActive = true,
         };
-
         var result = await userManager.CreateAsync(user, request.Password);
         if (!result.Succeeded)
-        {
             return BadRequest(new { errors = result.Errors.Select(error => error.Description) });
-        }
 
         await dbContext.Database.ExecuteSqlInterpolatedAsync(
-            $"EXEC dbo.UserProfile_Upsert @UserId={user.Id}, @Email={email}, @DisplayName={user.DisplayName}, @CreatedAtUtc={user.CreatedAtUtc}",
+            $"EXEC dbo.UserProfile_Upsert @UserId={user.Id}, @Email={user.Email}, @DisplayName={user.DisplayName}, @CreatedAtUtc={user.CreatedAtUtc}",
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -71,19 +100,18 @@ public sealed class AuthController(
             return BadRequest(new { message = "Invalid or missing anti-forgery token." });
         }
 
+        var email = request.Email.Trim();
+        var user = await userManager.FindByEmailAsync(email);
+        if (user is null || !user.IsActive)
+            return Unauthorized(new { message = "Email or password is incorrect, or the account is temporarily locked." });
+
         var result = await signInManager.PasswordSignInAsync(
-            request.Email.Trim(),
+            email,
             request.Password,
             isPersistent: false,
             lockoutOnFailure: true);
 
         if (!result.Succeeded)
-        {
-            return Unauthorized(new { message = "Email or password is incorrect, or the account is temporarily locked." });
-        }
-
-        var user = await userManager.FindByEmailAsync(request.Email.Trim());
-        if (user is null)
         {
             return Unauthorized(new { message = "Email or password is incorrect, or the account is temporarily locked." });
         }
@@ -170,12 +198,19 @@ public sealed class AuthController(
             return Unauthorized();
         }
 
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         var result = await userManager.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
         if (!result.Succeeded)
         {
             return BadRequest(new { errors = result.Errors.Select(error => error.Description) });
         }
 
+        user.MustChangePassword = false;
+        var updateResult = await userManager.UpdateAsync(user);
+        if (!updateResult.Succeeded)
+            return BadRequest(new { errors = updateResult.Errors.Select(error => error.Description) });
+
+        await transaction.CommitAsync(cancellationToken);
         await signInManager.RefreshSignInAsync(user);
         return NoContent();
     }
@@ -207,24 +242,30 @@ public sealed class AuthController(
     }
 
     private static AuthResponse ToResponse(ApplicationUser user) =>
-        new(user.Id, user.Email ?? string.Empty, user.DisplayName);
+        new(user.Id, user.Email ?? string.Empty, user.DisplayName, user.IsAdmin, user.MustChangePassword);
 }
 
-public sealed record RegisterRequest(
-    [Required, StringLength(100, MinimumLength = 2)] string DisplayName,
-    [Required, EmailAddress, StringLength(320)] string Email,
-    [Required, StringLength(128, MinimumLength = 12)] string Password);
-
 public sealed record LoginRequest(
-    [Required, EmailAddress, StringLength(320)] string Email,
+    [Required, EmailAddress, StringLength(256)] string Email,
     [Required, StringLength(128)] string Password);
 
 public sealed record UpdateProfileRequest(
     [Required, StringLength(100, MinimumLength = 2)] string DisplayName,
-    [Required, EmailAddress, StringLength(320)] string Email);
+    [Required, EmailAddress, StringLength(256)] string Email);
 
 public sealed record ChangePasswordRequest(
     [Required, StringLength(128)] string CurrentPassword,
     [Required, StringLength(128, MinimumLength = 12)] string NewPassword);
 
-public sealed record AuthResponse(Guid UserId, string Email, string DisplayName);
+public sealed record AcceptInvitationRequest(
+    [Required, StringLength(64, MinimumLength = 43)] string Token,
+    [Required, StringLength(128, MinimumLength = 12)] string Password);
+
+public sealed record AuthResponse(
+    Guid UserId,
+    string Email,
+    string DisplayName,
+    bool IsAdmin,
+    bool MustChangePassword);
+
+public sealed record InvitationDetails(string Email, string DisplayName);
