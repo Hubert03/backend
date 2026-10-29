@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Data;
 using System.Security.Claims;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.DataProtection;
 
 var configureOpenRouter = args.Contains("--configure-openrouter", StringComparer.Ordinal);
 var bootstrapAdminIndex = Array.IndexOf(args, "--bootstrap-admin");
@@ -136,6 +137,12 @@ builder.Services.AddScoped<DailyBriefingService>();
 builder.Services.AddScoped<SmartCaptureService>();
 builder.Services.AddScoped<WeeklyReviewService>();
 builder.Services.AddScoped<AdminAccessLogger>();
+
+var keysFolder = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "keys");
+Directory.CreateDirectory(keysFolder);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(keysFolder))
+    .SetApplicationName("AiLifeOS");
 
 var app = builder.Build();
 
