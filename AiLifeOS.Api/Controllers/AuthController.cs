@@ -23,6 +23,7 @@ public sealed class AuthController(
 {
     [AllowAnonymous]
     [HttpGet("csrf")]
+    [IgnoreAntiforgeryToken]
     public IActionResult GetCsrfToken()
     {
         var tokens = antiforgery.GetAndStoreTokens(HttpContext);
