@@ -19,6 +19,7 @@ public sealed class AiLifeOsDbContext(DbContextOptions<AiLifeOsDbContext> option
     public DbSet<ChatGroupMember> ChatGroupMembers => Set<ChatGroupMember>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
 
+    public DbSet<AdminAccessLogEntry> AdminAccessLog => Set<AdminAccessLogEntry>();
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -235,6 +236,19 @@ public sealed class AiLifeOsDbContext(DbContextOptions<AiLifeOsDbContext> option
                 .HasForeignKey(message => message.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(message => new { message.GroupId, message.CreatedAtUtc });
+        });
+
+        modelBuilder.Entity<AdminAccessLogEntry>(entity =>
+        {
+            entity.ToTable("AdminAccessLog", "dbo");
+            entity.HasKey(log => log.AdminAccessLogId);
+            entity.Property(log => log.AdminAccessLogId).HasDefaultValueSql("NEWSEQUENTIALID()");
+            entity.Property(log => log.AdminDisplayName).HasMaxLength(100).IsRequired();
+            entity.Property(log => log.TargetDisplayName).HasMaxLength(100).IsRequired();
+            entity.Property(log => log.Resource).HasMaxLength(20).IsRequired();
+            entity.Property(log => log.CreatedAtUtc)
+                .HasPrecision(0)
+                .HasDefaultValueSql("SYSUTCDATETIME()");
         });
     }
 }

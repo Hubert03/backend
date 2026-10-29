@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using System.Data;
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 
 var configureOpenRouter = args.Contains("--configure-openrouter", StringComparer.Ordinal);
 var bootstrapAdminIndex = Array.IndexOf(args, "--bootstrap-admin");
@@ -112,6 +113,25 @@ builder.Services.AddCors(options =>
               .AllowCredentials(); // 👈 CRITICAL: Allows cookies/antiforgery
     });
 });
+
+
+builder.Services.AddHttpClient<OpenRouterPlanService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(45);
+});
+
+builder.Services.AddMemoryCache();
+
+builder.Services.AddHttpClient<OpenRouterGateway>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(45);
+});
+
+builder.Services.AddScoped<DailyBriefingService>();
+builder.Services.AddScoped<SmartCaptureService>();
+builder.Services.AddScoped<WeeklyReviewService>();
+builder.Services.AddScoped<AdminAccessLogger>();
+
 var app = builder.Build();
 
 if (configureOpenRouter)
@@ -140,6 +160,8 @@ app.UseHttpsRedirection();
 app.UseCors("AllowAngularDev"); 
 
 app.UseAuthentication();
+
+
 app.Use(async (context, next) =>
 {
     if (context.User.Identity?.IsAuthenticated == true)
@@ -181,6 +203,28 @@ app.Use(async (context, next) =>
     await next();
 });
 app.UseAuthorization();
+
+var adminWorkspacePath = new Regex(
+    @"^/api/admin/users/([0-9a-fA-F-]{36})/workspace/(tasks|goals|notes)/?$",
+    RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+app.Use(async (context, next) =>
+{
+    var match = adminWorkspacePath.Match(context.Request.Path.Value ?? string.Empty);
+    if (HttpMethods.IsGet(context.Request.Method)
+        && match.Success
+        && context.User.FindFirstValue("is_admin") == "true"
+        && (!context.Request.Query.TryGetValue("skip", out var skip) || skip.ToString() == "0")
+        && Guid.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var adminId)
+        && Guid.TryParse(match.Groups[1].Value, out var targetId))
+    {
+        var accessLogger = context.RequestServices.GetRequiredService<AdminAccessLogger>();
+        await accessLogger.LogAsync(
+            adminId, targetId, match.Groups[2].Value.ToLowerInvariant(), context.RequestAborted);
+    }
+
+    await next();
+});
 
 app.MapControllers();
 app.MapHub<ChatHub>("/hubs/chat").RequireAuthorization();
