@@ -13,3 +13,6 @@ secrets.json
 
 TestResults/
 artifacts/
+
+publish/
+Properties/PublishProfiles/*.pubxml.user
