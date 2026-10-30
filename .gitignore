@@ -16,3 +16,4 @@ artifacts/
 
 publish/
 Properties/PublishProfiles/*.pubxml.user
+Properties/PublishProfiles/*.pubxml
