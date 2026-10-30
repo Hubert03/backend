@@ -1,6 +1,5 @@
 using AiLifeOS.Api.Data;
 using AiLifeOS.Api.Models;
-using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -10,34 +9,29 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.SqlClient;
-
+using Microsoft.AspNetCore.Antiforgery;
 namespace AiLifeOS.Api.Controllers;
 
 [ApiController]
 [Route("api/auth")]
+//public sealed class AuthController(
+//    AiLifeOsDbContext dbContext,
+//    SignInManager<ApplicationUser> signInManager,
+//    UserManager<ApplicationUser> userManager) : ControllerBase // <-- Removed IAntiforgery
 public sealed class AuthController(
     AiLifeOsDbContext dbContext,
-    IAntiforgery antiforgery,
     SignInManager<ApplicationUser> signInManager,
-    UserManager<ApplicationUser> userManager) : ControllerBase
+    UserManager<ApplicationUser> userManager,
+    IAntiforgery antiforgery) : ControllerBase
 {
-    [AllowAnonymous]
-    [HttpGet("csrf")]
-    [IgnoreAntiforgeryToken]
-    public IActionResult GetCsrfToken()
-    {
-        var tokens = antiforgery.GetAndStoreTokens(HttpContext);
-        return Ok(new { requestToken = tokens.RequestToken });
-    }
-
+    [ValidateAntiForgeryToken]
     [AllowAnonymous]
     [HttpPost("accept-invitation")]
     public async Task<IActionResult> AcceptInvitation(
         AcceptInvitationRequest request,
         CancellationToken cancellationToken)
     {
-        if (!await HasValidCsrfTokenAsync())
-            return BadRequest(new { message = "Invalid or missing anti-forgery token." });
+        // CSRF check removed
 
         byte[] tokenBytes;
         try
@@ -93,13 +87,23 @@ public sealed class AuthController(
     }
 
     [AllowAnonymous]
+    [HttpGet("csrf")]
+    public IActionResult GetCsrfToken()
+    {
+        var tokens = antiforgery.GetAndStoreTokens(HttpContext);
+
+        return Ok(new
+        {
+            token = tokens.RequestToken
+        });
+    }
+
+    [ValidateAntiForgeryToken]
+    [AllowAnonymous]
     [HttpPost("login")]
     public async Task<IActionResult> Login(LoginRequest request)
     {
-        if (!await HasValidCsrfTokenAsync())
-        {
-            return BadRequest(new { message = "Invalid or missing anti-forgery token." });
-        }
+        // CSRF check removed
 
         var email = request.Email.Trim();
         var user = await userManager.FindByEmailAsync(email);
@@ -134,15 +138,13 @@ public sealed class AuthController(
     }
 
     [Authorize]
+    [ValidateAntiForgeryToken]
     [HttpPut("profile")]
     public async Task<IActionResult> UpdateProfile(
         UpdateProfileRequest request,
         CancellationToken cancellationToken)
     {
-        if (!await HasValidCsrfTokenAsync())
-        {
-            return BadRequest(new { message = "Invalid or missing anti-forgery token." });
-        }
+        // CSRF check removed
 
         var user = await userManager.GetUserAsync(User);
         if (user is null)
@@ -182,16 +184,16 @@ public sealed class AuthController(
         return Ok(ToResponse(user));
     }
 
+
+
+    [ValidateAntiForgeryToken]
     [Authorize]
     [HttpPost("change-password")]
     public async Task<IActionResult> ChangePassword(
         ChangePasswordRequest request,
         CancellationToken cancellationToken)
     {
-        if (!await HasValidCsrfTokenAsync())
-        {
-            return BadRequest(new { message = "Invalid or missing anti-forgery token." });
-        }
+        // CSRF check removed
 
         var user = await userManager.GetUserAsync(User);
         if (user is null)
@@ -216,30 +218,15 @@ public sealed class AuthController(
         return NoContent();
     }
 
+
+    [ValidateAntiForgeryToken]
     [Authorize]
     [HttpPost("logout")]
     public async Task<IActionResult> Logout()
     {
-        if (!await HasValidCsrfTokenAsync())
-        {
-            return BadRequest(new { message = "Invalid or missing anti-forgery token." });
-        }
-
+        // CSRF check removed
         await signInManager.SignOutAsync();
         return NoContent();
-    }
-
-    private async Task<bool> HasValidCsrfTokenAsync()
-    {
-        try
-        {
-            await antiforgery.ValidateRequestAsync(HttpContext);
-            return true;
-        }
-        catch (AntiforgeryValidationException)
-        {
-            return false;
-        }
     }
 
     private static AuthResponse ToResponse(ApplicationUser user) =>
