@@ -14,6 +14,7 @@ public sealed class AiWeeklyReviewController(WeeklyReviewService review) : Contr
     public Task<IActionResult> Get(CancellationToken ct) => RunAsync(false, ct);
 
     [HttpPost("refresh")]
+    [ValidateAntiForgeryToken]
     public Task<IActionResult> Refresh(CancellationToken ct) => RunAsync(true, ct);
 
     private async Task<IActionResult> RunAsync(bool refresh, CancellationToken ct)

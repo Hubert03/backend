@@ -28,19 +28,6 @@ var builderArgs = args
 var builder = WebApplication.CreateBuilder(builderArgs);
 
 
-
-System.Diagnostics.Debug.WriteLine(
-    "ENVIRONMENT: " + builder.Environment.EnvironmentName);
-
-System.Diagnostics.Debug.WriteLine(
-    "CONTENT ROOT: " + builder.Environment.ContentRootPath);
-
-System.Diagnostics.Debug.WriteLine(
-    "DEVELOPMENT SETTINGS FILE EXISTS: " +
-    File.Exists(Path.Combine(
-        builder.Environment.ContentRootPath,
-        "appsettings.Development.json")));
-
 var configRoot = (Microsoft.Extensions.Configuration.IConfigurationRoot)
     builder.Configuration;
 
@@ -118,8 +105,8 @@ builder.Services.AddTransient<IInvitationEmailSender, SmtpInvitationEmailSender>
 
 
 // Determine cookie domain based on environment (null for localhost, root domain for live)
-var cookieDomain = builder.Environment.IsDevelopment() ? null : ".runasp.net";
-
+//var cookieDomain = builder.Environment.IsDevelopment() ? null : ".runasp.net";
+var cookieDomain = (string?)null;
 builder.Services.AddAntiforgery(options =>
 {
     options.HeaderName = "X-CSRF-TOKEN";
@@ -208,10 +195,6 @@ builder.Services.AddCors(options =>
 
 
 
-builder.Services.AddHttpClient<OpenRouterPlanService>(client =>
-{
-    client.Timeout = TimeSpan.FromSeconds(45);
-});
 
 builder.Services.AddMemoryCache();
 

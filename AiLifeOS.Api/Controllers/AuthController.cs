@@ -9,16 +9,22 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.SqlClient;
-
+using Microsoft.AspNetCore.Antiforgery;
 namespace AiLifeOS.Api.Controllers;
 
 [ApiController]
 [Route("api/auth")]
+//public sealed class AuthController(
+//    AiLifeOsDbContext dbContext,
+//    SignInManager<ApplicationUser> signInManager,
+//    UserManager<ApplicationUser> userManager) : ControllerBase // <-- Removed IAntiforgery
 public sealed class AuthController(
     AiLifeOsDbContext dbContext,
     SignInManager<ApplicationUser> signInManager,
-    UserManager<ApplicationUser> userManager) : ControllerBase // <-- Removed IAntiforgery
+    UserManager<ApplicationUser> userManager,
+    IAntiforgery antiforgery) : ControllerBase
 {
+    [ValidateAntiForgeryToken]
     [AllowAnonymous]
     [HttpPost("accept-invitation")]
     public async Task<IActionResult> AcceptInvitation(
@@ -81,6 +87,19 @@ public sealed class AuthController(
     }
 
     [AllowAnonymous]
+    [HttpGet("csrf")]
+    public IActionResult GetCsrfToken()
+    {
+        var tokens = antiforgery.GetAndStoreTokens(HttpContext);
+
+        return Ok(new
+        {
+            token = tokens.RequestToken
+        });
+    }
+
+    [ValidateAntiForgeryToken]
+    [AllowAnonymous]
     [HttpPost("login")]
     public async Task<IActionResult> Login(LoginRequest request)
     {
@@ -119,6 +138,7 @@ public sealed class AuthController(
     }
 
     [Authorize]
+    [ValidateAntiForgeryToken]
     [HttpPut("profile")]
     public async Task<IActionResult> UpdateProfile(
         UpdateProfileRequest request,
@@ -164,6 +184,9 @@ public sealed class AuthController(
         return Ok(ToResponse(user));
     }
 
+
+
+    [ValidateAntiForgeryToken]
     [Authorize]
     [HttpPost("change-password")]
     public async Task<IActionResult> ChangePassword(
@@ -195,6 +218,8 @@ public sealed class AuthController(
         return NoContent();
     }
 
+
+    [ValidateAntiForgeryToken]
     [Authorize]
     [HttpPost("logout")]
     public async Task<IActionResult> Logout()
