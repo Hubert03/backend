@@ -27,6 +27,41 @@ var builderArgs = args
     .ToArray();
 var builder = WebApplication.CreateBuilder(builderArgs);
 
+
+
+System.Diagnostics.Debug.WriteLine(
+    "ENVIRONMENT: " + builder.Environment.EnvironmentName);
+
+System.Diagnostics.Debug.WriteLine(
+    "CONTENT ROOT: " + builder.Environment.ContentRootPath);
+
+System.Diagnostics.Debug.WriteLine(
+    "DEVELOPMENT SETTINGS FILE EXISTS: " +
+    File.Exists(Path.Combine(
+        builder.Environment.ContentRootPath,
+        "appsettings.Development.json")));
+
+var configRoot = (Microsoft.Extensions.Configuration.IConfigurationRoot)
+    builder.Configuration;
+
+foreach (var provider in configRoot.Providers)
+{
+    if (provider.TryGet("ConnectionStrings:AiLifeOS", out var value)
+        && !string.IsNullOrWhiteSpace(value))
+    {
+        var cs = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(value);
+
+        System.Diagnostics.Debug.WriteLine(
+            "CONFIG SOURCE: " + provider);
+
+        System.Diagnostics.Debug.WriteLine(
+            "CONFIG SERVER: " + cs.DataSource);
+
+        System.Diagnostics.Debug.WriteLine(
+            "CONFIG DATABASE: " + cs.InitialCatalog);
+    }
+}
+
 // Add services to the container.
 
 builder.Services.AddControllersWithViews();
@@ -38,6 +73,16 @@ var connectionString = builder.Configuration.GetConnectionString("AiLifeOS")
     ?? throw new InvalidOperationException("Connection string 'AiLifeOS' is not configured.");
 builder.Services.AddDbContext<AiLifeOsDbContext>(options =>
     options.UseSqlServer(connectionString));
+
+var sqlBuilder =
+    new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connectionString);
+
+System.Diagnostics.Debug.WriteLine(
+    "SQL SERVER: " + sqlBuilder.DataSource);
+
+System.Diagnostics.Debug.WriteLine(
+    "DATABASE: " + sqlBuilder.InitialCatalog);
+
 
 builder.Services
     .AddIdentityCore<ApplicationUser>(options =>
@@ -65,15 +110,22 @@ builder.Services.AddAuthorization(options =>
         .RequireClaim("is_admin", "true")
         .RequireClaim("is_active", "true"));
 });
+
 builder.Services.AddSignalR();
-builder.Services.Configure<InvitationEmailOptions>(
-    builder.Configuration.GetSection("Email"));
+builder.Services.Configure<InvitationEmailOptions>(builder.Configuration.GetSection("Email"));
+
 builder.Services.AddTransient<IInvitationEmailSender, SmtpInvitationEmailSender>();
+
+
+// Determine cookie domain based on environment (null for localhost, root domain for live)
+var cookieDomain = builder.Environment.IsDevelopment() ? null : ".runasp.net";
+
 builder.Services.AddAntiforgery(options =>
 {
     options.HeaderName = "X-CSRF-TOKEN";
     options.Cookie.Name = ".AiLifeOS.AntiForgery";
     options.Cookie.HttpOnly = true;
+    options.Cookie.Domain = cookieDomain; // <-- CRITICAL FIX FOR LIVE
     options.Cookie.SameSite = SameSiteMode.Lax;
     options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
         ? CookieSecurePolicy.SameAsRequest
@@ -84,6 +136,7 @@ builder.Services.ConfigureApplicationCookie(options =>
 {
     options.Cookie.Name = ".AiLifeOS.Auth";
     options.Cookie.HttpOnly = true;
+    options.Cookie.Domain = cookieDomain; // <-- CRITICAL FIX FOR LIVE
     options.Cookie.SameSite = SameSiteMode.Lax;
     options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
         ? CookieSecurePolicy.SameAsRequest
@@ -100,6 +153,40 @@ builder.Services.ConfigureApplicationCookie(options =>
         return Task.CompletedTask;
     };
 });
+
+
+
+//builder.Services.AddAntiforgery(options =>
+//{
+//    options.HeaderName = "X-CSRF-TOKEN";
+//    options.Cookie.Name = ".AiLifeOS.AntiForgery";
+//    options.Cookie.HttpOnly = true;
+//    options.Cookie.SameSite = SameSiteMode.Lax;
+//    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+//        ? CookieSecurePolicy.SameAsRequest
+//        : CookieSecurePolicy.Always;
+//});
+
+//builder.Services.ConfigureApplicationCookie(options =>
+//{
+//    options.Cookie.Name = ".AiLifeOS.Auth";
+//    options.Cookie.HttpOnly = true;
+//    options.Cookie.SameSite = SameSiteMode.Lax;
+//    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+//        ? CookieSecurePolicy.SameAsRequest
+//        : CookieSecurePolicy.Always;
+//    options.SlidingExpiration = true;
+//    options.Events.OnRedirectToLogin = context =>
+//    {
+//        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+//        return Task.CompletedTask;
+//    };
+//    options.Events.OnRedirectToAccessDenied = context =>
+//    {
+//        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+//        return Task.CompletedTask;
+//    };
+//});
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
