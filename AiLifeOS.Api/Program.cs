@@ -219,8 +219,11 @@ var app = builder.Build();
 if (configureOpenRouter)
 {
     await using var scope = app.Services.CreateAsyncScope();
+
     var dbContext = scope.ServiceProvider.GetRequiredService<AiLifeOsDbContext>();
-    await OpenRouterSettingsConfigurator.ConfigureAsync(dbContext);
+    var apiKeyProtector = scope.ServiceProvider.GetRequiredService<OpenRouterApiKeyProtector>();
+
+    await OpenRouterSettingsConfigurator.ConfigureAsync(dbContext, apiKeyProtector);
     return;
 }
 
