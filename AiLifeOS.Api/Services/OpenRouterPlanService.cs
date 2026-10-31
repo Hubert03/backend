@@ -9,7 +9,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AiLifeOS.Api.Services;
 
-public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbContext dbContext)
+//public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbContext dbContext)
+public sealed class OpenRouterPlanService(HttpClient httpClient,AiLifeOsDbContext dbContext,OpenRouterApiKeyProtector apiKeyProtector)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -34,39 +35,48 @@ public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbConte
             throw new AiPlanConfigurationException(
                 "The stored OpenRouter URL or model is invalid. Update the provider settings in the app.");
         }
-        if (!OperatingSystem.IsWindows())
-        {
-            throw new AiPlanConfigurationException(
-                "The stored OpenRouter key is protected for Windows. Run the API on the Windows user account that configured it.");
-        }
+        //if (!OperatingSystem.IsWindows())
+        //{
+        //    throw new AiPlanConfigurationException(
+        //        "The stored OpenRouter key is protected for Windows. Run the API on the Windows user account that configured it.");
+        //}
 
+        //string apiKey;
+        //try
+        //{
+        //    var decryptedKey = OpenRouterSettingsPolicy.UnprotectApiKey(settings.EncryptedApiKey);
+        //    try
+        //    {
+        //        apiKey = Encoding.UTF8.GetString(decryptedKey);
+        //    }
+        //    finally
+        //    {
+        //        CryptographicOperations.ZeroMemory(decryptedKey);
+        //    }
+        //}
         string apiKey;
+
         try
         {
-            var decryptedKey = OpenRouterSettingsPolicy.UnprotectApiKey(settings.EncryptedApiKey);
-            try
-            {
-                apiKey = Encoding.UTF8.GetString(decryptedKey);
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(decryptedKey);
-            }
+            apiKey = apiKeyProtector.UnprotectApiKey(settings.EncryptedApiKey);
+        }
+        catch (Exception exception) when (exception is CryptographicException || exception is FormatException)
+        {
+            throw new AiPlanConfigurationException("The stored OpenRouter key cannot be decrypted. Update the provider settings in the app.",exception);
         }
         catch (CryptographicException exception)
         {
-            throw new AiPlanConfigurationException(
-                "The stored OpenRouter key cannot be decrypted for this Windows user. Update the provider settings in the app.",
-                exception);
+            throw new AiPlanConfigurationException("The stored OpenRouter key cannot be decrypted for this Windows user. Update the provider settings in the app.",exception);
         }
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            throw new AiPlanConfigurationException(
-                "The stored OpenRouter API key is empty. Update the provider settings in the app.");
+            throw new AiPlanConfigurationException("The stored OpenRouter API key is empty. Update the provider settings in the app.");
         }
+
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, apiUri);
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
         httpRequest.Content = new StringContent(
             JsonSerializer.Serialize(new
             {
@@ -88,8 +98,7 @@ public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbConte
                     }
                 }
             }),
-            Encoding.UTF8,
-            "application/json");
+            Encoding.UTF8,"application/json");
 
         using var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -100,8 +109,7 @@ public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbConte
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (body.Length > 1_000_000)
         {
-            throw new AiPlanProviderException(
-                failureMessage: "OpenRouter returned an oversized response. Try again or select another model in Settings.");
+            throw new AiPlanProviderException(failureMessage: "OpenRouter returned an oversized response. Try again or select another model in Settings.");
         }
 
         OpenRouterCompletion? completion;
@@ -111,40 +119,33 @@ public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbConte
         }
         catch (JsonException)
         {
-            throw new AiPlanProviderException(
-                failureMessage: "OpenRouter returned a response in an unsupported format. Try again or select another model in Settings.");
+            throw new AiPlanProviderException(failureMessage: "OpenRouter returned a response in an unsupported format. Try again or select another model in Settings.");
         }
 
         var choice = completion?.Choices?.FirstOrDefault();
         var finishReason = choice?.FinishReason;
         if (string.Equals(finishReason, "length", StringComparison.OrdinalIgnoreCase))
         {
-            throw new AiPlanProviderException(
-                failureMessage: "The AI response was cut off before the plan was complete. Try a shorter prompt or a model with a larger output limit.");
+            throw new AiPlanProviderException(failureMessage: "The AI response was cut off before the plan was complete. Try a shorter prompt or a model with a larger output limit.");
         }
 
-        var content = choice?.Message is { } message
-            ? ExtractMessageContent(message.Content)
-            : null;
+        var content = choice?.Message is { } message ? ExtractMessageContent(message.Content) : null;
         if (string.IsNullOrWhiteSpace(content))
         {
             var reason = choice?.Message?.Refusal;
-            throw new AiPlanProviderException(
-                failureMessage: !string.IsNullOrWhiteSpace(reason)
+            throw new AiPlanProviderException(failureMessage: !string.IsNullOrWhiteSpace(reason)
                     ? "The selected AI model refused to create a plan. Try rephrasing your request or selecting another model in Settings."
                     : $"The selected OpenRouter model returned no plan text{FormatFinishReason(finishReason)}. Try again or select another model in Settings.");
         }
 
         if (content.Length > 100_000)
         {
-            throw new AiPlanProviderException(
-                failureMessage: "The AI response was too large to parse. Try a shorter prompt or select a model that returns more concise plans.");
+            throw new AiPlanProviderException(failureMessage: "The AI response was too large to parse. Try a shorter prompt or select a model that returns more concise plans.");
         }
 
         if (!TryExtractJsonObject(content, out var json))
         {
-            throw new AiPlanProviderException(
-                failureMessage: "The selected OpenRouter model did not return a JSON plan. In Settings, choose a model that supports JSON output and try again.");
+            throw new AiPlanProviderException(failureMessage: "The selected OpenRouter model did not return a JSON plan. In Settings, choose a model that supports JSON output and try again.");
         }
 
         StructuredPlan? plan;
@@ -154,8 +155,7 @@ public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbConte
         }
         catch (JsonException)
         {
-            throw new AiPlanProviderException(
-                failureMessage: "The selected OpenRouter model returned malformed JSON. Choose a model that supports JSON output in Settings and try again.");
+            throw new AiPlanProviderException(failureMessage: "The selected OpenRouter model returned malformed JSON. Choose a model that supports JSON output in Settings and try again.");
         }
 
         return ValidateAndMap(plan, request.Target);
@@ -369,57 +369,31 @@ public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbConte
     }
 
     private sealed record OpenRouterCompletion(List<OpenRouterChoice>? Choices);
-    private sealed record OpenRouterChoice(
-        OpenRouterMessage? Message,
-        [property: JsonPropertyName("finish_reason")] string? FinishReason);
+    private sealed record OpenRouterChoice(OpenRouterMessage? Message,[property: JsonPropertyName("finish_reason")] string? FinishReason);
     private sealed record OpenRouterMessage(JsonElement Content, string? Refusal);
 
-    private sealed record StructuredPlan(
-        string? Summary,
-        StructuredNote? Note,
-        StructuredGoal? Goal,
-        List<StructuredTask?>? Tasks);
+    private sealed record StructuredPlan(string? Summary,StructuredNote? Note,StructuredGoal? Goal,List<StructuredTask?>? Tasks);
     private sealed record StructuredNote(string? Title, string? Content);
-    private sealed record StructuredGoal(
-        string? Title,
-        string? Description,
-        DateOnly? TargetDate,
-        List<StructuredMilestone?>? Milestones);
+    private sealed record StructuredGoal(string? Title,string? Description,DateOnly? TargetDate,List<StructuredMilestone?>? Milestones);
     private sealed record StructuredMilestone(string? Title, bool IsCompleted);
     private sealed record StructuredTask(string? Title, string? Description, DateTimeOffset? DueAtUtc, int Priority);
 }
 
-public sealed class AiPlanConfigurationException(string message, Exception? innerException = null)
-    : Exception(message, innerException);
+public sealed class AiPlanConfigurationException(string message, Exception? innerException = null) : Exception(message, innerException);
 
-public sealed class AiPlanProviderException(
-    HttpStatusCode? providerStatusCode = null,
-    string? failureMessage = null) : Exception(failureMessage)
+public sealed class AiPlanProviderException(HttpStatusCode? providerStatusCode = null,string? failureMessage = null) : Exception(failureMessage)
 {
     public HttpStatusCode? ProviderStatusCode { get; } = providerStatusCode;
     public string? FailureMessage { get; } = failureMessage;
 }
 
-public sealed record PlanRequest(
-    string Objective,
-    string? Context,
-    DateOnly? TargetDate,
-    IReadOnlyList<string>? Constraints,
-    string Target);
+public sealed record PlanRequest(string Objective,string? Context,DateOnly? TargetDate,IReadOnlyList<string>? Constraints,string Target);
 
-public sealed record PlanResponse(
-    string Summary,
-    PlanNoteResponse? Note,
-    PlanGoalResponse? Goal,
-    IReadOnlyList<PlanTaskResponse> Tasks);
+public sealed record PlanResponse(string Summary,PlanNoteResponse? Note,PlanGoalResponse? Goal,IReadOnlyList<PlanTaskResponse> Tasks);
 
 public sealed record PlanNoteResponse(string Title, string Content);
 
-public sealed record PlanGoalResponse(
-    string Title,
-    string? Description,
-    DateOnly? TargetDate,
-    IReadOnlyList<PlanMilestoneResponse> Milestones);
+public sealed record PlanGoalResponse(string Title,string? Description,DateOnly? TargetDate,IReadOnlyList<PlanMilestoneResponse> Milestones);
 
 public sealed record PlanMilestoneResponse(string Title, bool IsCompleted);
 

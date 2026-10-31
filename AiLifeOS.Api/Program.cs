@@ -210,9 +210,9 @@ builder.Services.AddScoped<AdminAccessLogger>();
 
 var keysFolder = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "keys");
 Directory.CreateDirectory(keysFolder);
-builder.Services.AddDataProtection()
-    .PersistKeysToFileSystem(new DirectoryInfo(keysFolder))
-    .SetApplicationName("AiLifeOS");
+builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keysFolder)).SetApplicationName("AiLifeOS");
+builder.Services.AddScoped<OpenRouterApiKeyProtector>();
+
 
 var app = builder.Build();
 

@@ -14,10 +14,8 @@ namespace AiLifeOS.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/settings")]
-public sealed class SettingsController(
-    AiLifeOsDbContext dbContext,
-    IAntiforgery antiforgery,
-    ILogger<SettingsController> logger) : ControllerBase
+//public sealed class SettingsController(AiLifeOsDbContext dbContext,IAntiforgery antiforgery,ILogger<SettingsController> logger) : ControllerBase
+public sealed class SettingsController(AiLifeOsDbContext dbContext,IAntiforgery antiforgery,ILogger<SettingsController> logger,OpenRouterApiKeyProtector apiKeyProtector) : ControllerBase
 {
     [HttpGet("ai-provider")]
     public async Task<ActionResult<AiProviderSettingsResponse>> GetAiProviderSettings(
@@ -97,8 +95,7 @@ public sealed class SettingsController(
 
             if (!OperatingSystem.IsWindows())
             {
-                logger.LogError(
-                    "AI provider settings update failed: Windows DPAPI is unavailable.");
+                logger.LogError("AI provider settings update failed: Windows DPAPI is unavailable.");
 
                 return StatusCode(StatusCodes.Status503ServiceUnavailable, new
                 {
@@ -108,11 +105,7 @@ public sealed class SettingsController(
 
             stage = "Existing settings database lookup";
 
-            var settings = await dbContext.AiProviderSettings
-                .AsNoTracking()
-                .SingleOrDefaultAsync(
-                    item => item.SettingsId == 1,
-                    cancellationToken);
+            var settings = await dbContext.AiProviderSettings.AsNoTracking().SingleOrDefaultAsync(item => item.SettingsId == 1,cancellationToken);
 
             byte[] encryptedApiKey;
 
@@ -124,19 +117,11 @@ public sealed class SettingsController(
             else if (!string.IsNullOrWhiteSpace(apiKey))
             {
                 stage = "DPAPI API key encryption";
-
-                logger.LogInformation(
-                    "Starting DPAPI encryption. Windows: {IsWindows}",
-                    OperatingSystem.IsWindows());
-
-                encryptedApiKey =
-                    OpenRouterSettingsPolicy.ProtectApiKey(apiKey);
-
-                logger.LogInformation(
-                    "DPAPI encryption completed successfully.");
+                //logger.LogInformation("Starting DPAPI encryption. Windows: {IsWindows}",OperatingSystem.IsWindows());
+                encryptedApiKey = apiKeyProtector.ProtectApiKey(apiKey);
+                logger.LogInformation("DPAPI encryption completed successfully.");
             }
-            else if (settings is not null &&
-                     settings.EncryptedApiKey.Length > 0)
+            else if (settings is not null && settings.EncryptedApiKey.Length > 0)
             {
                 stage = "Reusing existing encrypted API key";
                 encryptedApiKey = settings.EncryptedApiKey;
@@ -151,30 +136,19 @@ public sealed class SettingsController(
 
             stage = "SQL stored procedure execution";
 
-            logger.LogInformation(
-                "Executing AiProviderSettings_Upsert. TraceId: {TraceId}",
-                HttpContext.TraceIdentifier);
+            logger.LogInformation("Executing AiProviderSettings_Upsert. TraceId: {TraceId}",HttpContext.TraceIdentifier);
 
             var updatedAtUtc = DateTime.UtcNow;
-
             await dbContext.Database.ExecuteSqlInterpolatedAsync(
                 $"EXEC dbo.AiProviderSettings_Upsert @ApiUrl={apiUrl}, @Model={model}, @EncryptedApiKey={encryptedApiKey}, @UpdatedAtUtc={updatedAtUtc}",
                 cancellationToken);
 
-            logger.LogInformation(
-                "AiProviderSettings_Upsert executed successfully.");
+            logger.LogInformation("AiProviderSettings_Upsert executed successfully.");
 
             stage = "Reading saved settings";
 
-            var savedSettings = await dbContext.AiProviderSettings
-                .AsNoTracking()
-                .SingleAsync(
-                    item => item.SettingsId == 1,
-                    cancellationToken);
-
-            logger.LogInformation(
-                "AI provider settings saved and read back successfully. TraceId: {TraceId}",
-                HttpContext.TraceIdentifier);
+            var savedSettings = await dbContext.AiProviderSettings.AsNoTracking().SingleAsync(item => item.SettingsId == 1,cancellationToken);
+            logger.LogInformation("AI provider settings saved and read back successfully. TraceId: {TraceId}",HttpContext.TraceIdentifier);
 
             return Ok(ToResponse(savedSettings));
         }
