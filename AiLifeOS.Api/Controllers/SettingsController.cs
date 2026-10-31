@@ -189,16 +189,20 @@ public sealed class SettingsController(
         }
         catch (Exception ex)
         {
+            var traceId = HttpContext.TraceIdentifier;
+
             logger.LogError(
                 ex,
                 "AI PROVIDER SETTINGS UPDATE FAILED. Stage: {Stage}, TraceId: {TraceId}",
                 stage,
-                HttpContext.TraceIdentifier);
+                traceId);
 
             return StatusCode(StatusCodes.Status500InternalServerError, new
             {
-                message = "Failed to save AI provider settings. Check the server application log.",
-                traceId = HttpContext.TraceIdentifier
+                message = "Failed to save AI provider settings.",
+                stage = stage,
+                errorType = ex.GetType().FullName,
+                traceId = traceId
             });
         }
     }
