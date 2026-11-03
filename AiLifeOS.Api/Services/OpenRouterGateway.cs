@@ -11,7 +11,8 @@ namespace AiLifeOS.Api.Services;
 public sealed class OpenRouterGateway(
     HttpClient httpClient,
     AiLifeOsDbContext dbContext,
-    OpenRouterApiKeyProtector apiKeyProtector)
+    OpenRouterApiKeyProtector apiKeyProtector,
+    AiRequestGate aiRequestGate)
 {
     public async Task<string> CompleteJsonAsync(
         string systemPrompt, string userContent, int maxTokens, CancellationToken cancellationToken)
@@ -75,6 +76,7 @@ public sealed class OpenRouterGateway(
             Encoding.UTF8,
             "application/json");
 
+        await using var requestLease = await aiRequestGate.EnterAsync(cancellationToken);
         using var response = await httpClient.SendAsync(request, cancellationToken);
 
         if (!response.IsSuccessStatusCode)

@@ -72,6 +72,9 @@ public sealed class AuthController(
             DisplayName = invitation.DisplayName,
             CreatedAtUtc = DateTime.UtcNow,
             IsActive = true,
+            AccessRole = invitation.AccessRole,
+            TeamId = invitation.TeamId,
+            IsAdmin = invitation.AccessRole is "SuperAdmin" or "Admin",
         };
         var result = await userManager.CreateAsync(user, request.Password);
         if (!result.Succeeded)
@@ -107,8 +110,13 @@ public sealed class AuthController(
 
         var email = request.Email.Trim();
         var user = await userManager.FindByEmailAsync(email);
-        if (user is null || !user.IsActive)
+        if (user is null)
             return Unauthorized(new { message = "Email or password is incorrect, or the account is temporarily locked." });
+        if (!user.IsActive)
+        {
+            await RecordLoginAttemptAsync(user.Id, false);
+            return Unauthorized(new { message = "Email or password is incorrect, or the account is temporarily locked." });
+        }
 
         var result = await signInManager.PasswordSignInAsync(
             email,
@@ -118,9 +126,11 @@ public sealed class AuthController(
 
         if (!result.Succeeded)
         {
+            await RecordLoginAttemptAsync(user.Id, false);
             return Unauthorized(new { message = "Email or password is incorrect, or the account is temporarily locked." });
         }
 
+        await RecordLoginAttemptAsync(user.Id, true);
         return Ok(ToResponse(user));
     }
 
@@ -230,7 +240,19 @@ public sealed class AuthController(
     }
 
     private static AuthResponse ToResponse(ApplicationUser user) =>
-        new(user.Id, user.Email ?? string.Empty, user.DisplayName, user.IsAdmin, user.MustChangePassword);
+        new(user.Id, user.Email ?? string.Empty, user.DisplayName, user.IsAdmin,
+            user.MustChangePassword, user.AccessRole, user.TeamId);
+
+    private async Task RecordLoginAttemptAsync(Guid userId, bool succeeded)
+    {
+        dbContext.LoginHistory.Add(new LoginHistoryEntry
+        {
+            UserId = userId,
+            Succeeded = succeeded,
+            AttemptedAtUtc = DateTime.UtcNow,
+        });
+        await dbContext.SaveChangesAsync();
+    }
 }
 
 public sealed record LoginRequest(
@@ -254,6 +276,8 @@ public sealed record AuthResponse(
     string Email,
     string DisplayName,
     bool IsAdmin,
-    bool MustChangePassword);
+    bool MustChangePassword,
+    string AccessRole,
+    Guid? TeamId);
 
-public sealed record InvitationDetails(string Email, string DisplayName);
+public sealed record InvitationDetails(string Email, string DisplayName, string AccessRole, Guid? TeamId);

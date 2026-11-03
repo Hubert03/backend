@@ -9,4 +9,6 @@ public sealed class ApplicationUser : IdentityUser<Guid>
     public bool IsAdmin { get; set; }
     public bool IsActive { get; set; } = true;
     public bool MustChangePassword { get; set; }
+    public string AccessRole { get; set; } = "User";
+    public Guid? TeamId { get; set; }
 }

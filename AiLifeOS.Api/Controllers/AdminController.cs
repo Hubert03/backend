@@ -26,6 +26,36 @@ public sealed class AdminController(
     IOptions<InvitationEmailOptions> emailOptions,
     ILogger<AdminController> logger) : ControllerBase
 {
+    [HttpGet("login-history")]
+    public async Task<IActionResult> GetLoginHistory(
+        [FromQuery] int take = 50,
+        CancellationToken cancellationToken = default)
+    {
+        var rows = await (
+            from entry in dbContext.LoginHistory.AsNoTracking()
+            join user in userManager.Users.AsNoTracking() on entry.UserId equals user.Id
+            orderby entry.AttemptedAtUtc descending
+            select new
+            {
+                entry.LoginHistoryId,
+                entry.UserId,
+                user.DisplayName,
+                Email = user.Email ?? string.Empty,
+                entry.Succeeded,
+                entry.AttemptedAtUtc,
+            })
+            .Take(Math.Clamp(take, 1, 100))
+            .ToListAsync(cancellationToken);
+
+        return Ok(rows.Select(entry => new LoginHistoryResponse(
+            entry.LoginHistoryId,
+            entry.UserId,
+            entry.DisplayName,
+            entry.Email,
+            entry.Succeeded,
+            DateTime.SpecifyKind(entry.AttemptedAtUtc, DateTimeKind.Utc))));
+    }
+
     [HttpGet("dashboard")]
     public async Task<ActionResult<AdminDashboardResponse>> GetDashboard(
         CancellationToken cancellationToken)
@@ -44,6 +74,8 @@ public sealed class AdminController(
                 Email = user.Email ?? string.Empty,
                 user.DisplayName,
                 user.IsAdmin,
+                user.AccessRole,
+                user.TeamId,
                 user.IsActive,
                 user.MustChangePassword,
                 user.CreatedAtUtc,
@@ -119,6 +151,8 @@ public sealed class AdminController(
                     user.Email,
                     user.DisplayName,
                     user.IsAdmin,
+                    user.AccessRole,
+                    user.TeamId,
                     user.IsActive,
                     user.MustChangePassword,
                     user.CreatedAtUtc,
@@ -177,6 +211,8 @@ public sealed class AdminController(
                 user.Email ?? string.Empty,
                 user.DisplayName,
                 user.IsAdmin,
+                user.AccessRole,
+                user.TeamId,
                 user.IsActive,
                 user.MustChangePassword,
                 user.CreatedAtUtc))
@@ -310,9 +346,22 @@ public sealed class AdminController(
         CreateUserRequest request,
         CancellationToken cancellationToken)
     {
+        var currentAdmin = await GetCurrentAdminAsync(cancellationToken);
+        if (currentAdmin is null) return Unauthorized();
+        if ((request.AccessRole is "Admin" or "SuperAdmin") &&
+            currentAdmin.AccessRole != "SuperAdmin")
+            return Forbid();
+
         var email = request.Email.Trim();
         if (await userManager.FindByEmailAsync(email) is not null)
             return Conflict(new { message = "An account with this email already exists." });
+        if (!IsValidAccessRole(request.AccessRole))
+            return BadRequest(new { message = "Choose a valid account role." });
+        if ((request.AccessRole is "Admin" or "SuperAdmin") && request.TeamId is not null)
+            return BadRequest(new { message = "Organization administrators cannot be assigned to a team." });
+        if (request.TeamId is Guid teamId &&
+            !await dbContext.Teams.AnyAsync(team => team.TeamId == teamId, cancellationToken))
+            return BadRequest(new { message = "Choose an existing team." });
 
         var temporaryPassword =
             $"Aa1!{WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(18))}z9";
@@ -324,6 +373,9 @@ public sealed class AdminController(
             CreatedAtUtc = DateTime.UtcNow,
             IsActive = true,
             MustChangePassword = true,
+            AccessRole = request.AccessRole,
+            TeamId = request.TeamId,
+            IsAdmin = request.AccessRole is "Admin" or "SuperAdmin",
         };
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
@@ -352,9 +404,22 @@ public sealed class AdminController(
         CreateInvitationRequest request,
         CancellationToken cancellationToken)
     {
+        var currentAdmin = await GetCurrentAdminAsync(cancellationToken);
+        if (currentAdmin is null) return Unauthorized();
+        if ((request.AccessRole is "Admin" or "SuperAdmin") &&
+            currentAdmin.AccessRole != "SuperAdmin")
+            return Forbid();
+
         var email = request.Email.Trim();
         if (await userManager.FindByEmailAsync(email) is not null)
             return Conflict(new { message = "An account with this email already exists." });
+        if (!IsValidAccessRole(request.AccessRole))
+            return BadRequest(new { message = "Choose a valid invitation role." });
+        if ((request.AccessRole is "Admin" or "SuperAdmin") && request.TeamId is not null)
+            return BadRequest(new { message = "Organization administrators cannot be assigned to a team." });
+        if (request.TeamId is Guid teamId &&
+            !await dbContext.Teams.AnyAsync(team => team.TeamId == teamId, cancellationToken))
+            return BadRequest(new { message = "Choose an existing team." });
 
         var settings = emailOptions.Value;
         if (string.IsNullOrWhiteSpace(settings.SmtpHost) ||
@@ -379,7 +444,7 @@ public sealed class AdminController(
         var adminId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
         await dbContext.Database.ExecuteSqlInterpolatedAsync(
-            $"EXEC dbo.UserInvitation_Create @Email={email}, @DisplayName={request.DisplayName.Trim()}, @TokenHash={tokenHash}, @CreatedByUserId={adminId}, @ExpiresAtUtc={expiresAtUtc}",
+            $"EXEC dbo.UserInvitation_Create @Email={email}, @DisplayName={request.DisplayName.Trim()}, @TokenHash={tokenHash}, @CreatedByUserId={adminId}, @ExpiresAtUtc={expiresAtUtc}, @AccessRole={request.AccessRole}, @TeamId={request.TeamId}",
             cancellationToken);
 
         var invitationUrl =
@@ -429,18 +494,41 @@ public sealed class AdminController(
         SetUserAccessRequest request,
         CancellationToken cancellationToken)
     {
-        var currentAdminId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        if (userId == currentAdminId && (!request.IsAdmin || !request.IsActive))
+        var currentAdmin = await GetCurrentAdminAsync(cancellationToken);
+        if (currentAdmin is null) return Unauthorized();
+        var currentAdminId = currentAdmin.Id;
+        if (userId == currentAdminId && (request.AccessRole is not ("Admin" or "SuperAdmin") || !request.IsActive))
             return BadRequest(new { message = "You cannot remove your own active administrator access." });
+        if (!IsValidAccessRole(request.AccessRole) ||
+            request.IsAdmin != (request.AccessRole is "Admin" or "SuperAdmin"))
+            return BadRequest(new { message = "The account role is invalid." });
+        if ((request.AccessRole is "Admin" or "SuperAdmin") && request.TeamId is not null)
+            return BadRequest(new { message = "Organization administrators cannot be assigned to a team." });
 
         var user = await userManager.FindByIdAsync(userId.ToString());
         if (user is null)
             return NotFound();
+        if (currentAdmin.AccessRole != "SuperAdmin" &&
+            ((user.AccessRole is "Admin" or "SuperAdmin") ||
+             (request.AccessRole is "Admin" or "SuperAdmin")))
+            return Forbid();
 
         await dbContext.Database.ExecuteSqlInterpolatedAsync(
-            $"EXEC dbo.UserAdmin_SetAccess @UserId={user.Id}, @IsAdmin={request.IsAdmin}, @IsActive={request.IsActive}, @MustChangePassword={user.MustChangePassword}",
+            $"EXEC dbo.UserAdmin_SetAccess @UserId={user.Id}, @AccessRole={request.AccessRole}, @IsActive={request.IsActive}, @MustChangePassword={user.MustChangePassword}, @TeamId={request.TeamId}",
             cancellationToken);
         return NoContent();
+    }
+
+    private static bool IsValidAccessRole(string role) =>
+        role is "SuperAdmin" or "Admin" or "Manager" or "TeamLead" or "User";
+
+    private Task<ApplicationUser?> GetCurrentAdminAsync(CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+            return Task.FromResult<ApplicationUser?>(null);
+        return userManager.Users.FirstOrDefaultAsync(
+            user => user.Id == userId && user.IsActive && user.IsAdmin,
+            cancellationToken);
     }
 
     [HttpGet("chat-groups")]
@@ -599,6 +687,14 @@ public sealed record AdminDashboardResponse(
 
 public sealed record AdminTaskStatusCountResponse(string Status, int Total);
 
+public sealed record LoginHistoryResponse(
+    Guid LoginHistoryId,
+    Guid UserId,
+    string DisplayName,
+    string Email,
+    bool Succeeded,
+    DateTime AttemptedAtUtc);
+
 public sealed record AdminActivityDayResponse(DateTime DateUtc, int Total);
 
 public sealed record AdminWorkspaceSummaryResponse(
@@ -606,6 +702,8 @@ public sealed record AdminWorkspaceSummaryResponse(
     string Email,
     string DisplayName,
     bool IsAdmin,
+    string AccessRole,
+    Guid? TeamId,
     bool IsActive,
     bool MustChangePassword,
     DateTime CreatedAtUtc,
@@ -664,13 +762,17 @@ public sealed record AdminUserResponse(
     string Email,
     string DisplayName,
     bool IsAdmin,
+    string AccessRole,
+    Guid? TeamId,
     bool IsActive,
     bool MustChangePassword,
     DateTime CreatedAtUtc);
 
 public sealed record CreateUserRequest(
     [Required, StringLength(100, MinimumLength = 2)] string DisplayName,
-    [Required, EmailAddress, StringLength(256)] string Email);
+    [Required, EmailAddress, StringLength(256)] string Email,
+    string AccessRole = "User",
+    Guid? TeamId = null);
 
 public sealed record CreatedUserResponse(
     Guid UserId,
@@ -681,11 +783,17 @@ public sealed record CreatedUserResponse(
 
 public sealed record CreateInvitationRequest(
     [Required, StringLength(100, MinimumLength = 2)] string DisplayName,
-    [Required, EmailAddress, StringLength(256)] string Email);
+    [Required, EmailAddress, StringLength(256)] string Email,
+    string AccessRole = "User",
+    Guid? TeamId = null);
 
 public sealed record InvitationCreatedResponse(string Email, DateTime ExpiresAtUtc);
 
-public sealed record SetUserAccessRequest(bool IsAdmin, bool IsActive);
+public sealed record SetUserAccessRequest(
+    bool IsAdmin,
+    bool IsActive,
+    string AccessRole = "User",
+    Guid? TeamId = null);
 
 public sealed record AdminChatGroupResponse(
     Guid GroupId,

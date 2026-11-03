@@ -10,7 +10,11 @@ using Microsoft.EntityFrameworkCore;
 namespace AiLifeOS.Api.Services;
 
 //public sealed class OpenRouterPlanService(HttpClient httpClient, AiLifeOsDbContext dbContext)
-public sealed class OpenRouterPlanService(HttpClient httpClient,AiLifeOsDbContext dbContext,OpenRouterApiKeyProtector apiKeyProtector)
+public sealed class OpenRouterPlanService(
+    HttpClient httpClient,
+    AiLifeOsDbContext dbContext,
+    OpenRouterApiKeyProtector apiKeyProtector,
+    AiRequestGate aiRequestGate)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -100,6 +104,7 @@ public sealed class OpenRouterPlanService(HttpClient httpClient,AiLifeOsDbContex
             }),
             Encoding.UTF8,"application/json");
 
+        await using var requestLease = await aiRequestGate.EnterAsync(cancellationToken);
         using var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
@@ -126,7 +131,7 @@ public sealed class OpenRouterPlanService(HttpClient httpClient,AiLifeOsDbContex
         var finishReason = choice?.FinishReason;
         if (string.Equals(finishReason, "length", StringComparison.OrdinalIgnoreCase))
         {
-            throw new AiPlanProviderException(failureMessage: "The AI response was cut off before the plan was complete. Try a shorter prompt or a model with a larger output limit.");
+            throw new AiPlanProviderException(failureMessage: "The plan exceeded the selected model's response limit. Narrow the request or choose a model with a larger output limit.");
         }
 
         var content = choice?.Message is { } message ? ExtractMessageContent(message.Content) : null;
@@ -176,6 +181,7 @@ public sealed class OpenRouterPlanService(HttpClient httpClient,AiLifeOsDbContex
         + "For notes, note must be an object with title and content. For goals, goal must be an object with title, description, targetDate (YYYY-MM-DD or null), and milestones (an array of objects with title and isCompleted). "
         + "For tasks, tasks must be an array of objects with title, description, dueAtUtc (ISO-8601 UTC timestamp or null), and priority. "
         + "Use 1-4 for task priority, keep dates within the requested target date when present, and do not claim completed work. "
+        + "Keep the plan concise: return at most 12 tasks and at most 8 milestones; keep each task description to one sentence. "
         + "Unused note/goal fields must be null and unused task lists must be empty. Do not use markdown fences or include text outside the JSON object.";
 
     private static PlanResponse ValidateAndMap(StructuredPlan? plan, string target)
@@ -184,7 +190,7 @@ public sealed class OpenRouterPlanService(HttpClient httpClient,AiLifeOsDbContex
             || string.IsNullOrWhiteSpace(plan.Summary)
             || plan.Summary.Length > 2000
             || plan.Tasks is null
-            || plan.Tasks.Count > 50)
+            || plan.Tasks.Count > 12)
         {
             throw new AiPlanProviderException(
                 failureMessage: "The AI returned a plan with missing or invalid summary/task data. Try again or select a different model in Settings.");
@@ -207,7 +213,7 @@ public sealed class OpenRouterPlanService(HttpClient httpClient,AiLifeOsDbContex
                 || source.Title.Length > 200
                 || source.Description?.Length > 2000
                 || sourceMilestones is null
-                || sourceMilestones.Count > 20
+                || sourceMilestones.Count > 8
                 || sourceMilestones.Any(milestone =>
                     milestone is null
                     || string.IsNullOrWhiteSpace(milestone.Title)
