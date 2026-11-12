@@ -8,4 +8,7 @@ public sealed class ChatMessage
     public string DisplayName { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
     public DateTime CreatedAtUtc { get; set; }
+    public bool IsDeleted { get; set; }
+    public Guid? DeletedByUserId { get; set; }
+    public Guid? ReplyToMessageId { get; set; }
 }
