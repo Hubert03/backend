@@ -197,11 +197,14 @@ builder.Services.AddCors(options =>
 
 
 builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<AiRequestGate>();
 
 builder.Services.AddHttpClient<OpenRouterGateway>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(45);
 });
+builder.Services.AddScoped<KnowledgeAssistantService>();
+builder.Services.AddScoped<DailyCopilotService>();
 
 builder.Services.AddScoped<DailyBriefingService>();
 builder.Services.AddScoped<SmartCaptureService>();
@@ -210,17 +213,23 @@ builder.Services.AddScoped<AdminAccessLogger>();
 
 var keysFolder = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "keys");
 Directory.CreateDirectory(keysFolder);
-builder.Services.AddDataProtection()
-    .PersistKeysToFileSystem(new DirectoryInfo(keysFolder))
-    .SetApplicationName("AiLifeOS");
+builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keysFolder)).SetApplicationName("AiLifeOS");
+builder.Services.AddScoped<OpenRouterApiKeyProtector>();
+
+
+builder.Services.Configure<AiLifeOS.Api.Services.VapidOptions>(builder.Configuration.GetSection("Vapid"));
+builder.Services.AddHostedService<AiLifeOS.Api.Services.ReminderDispatcher>();
 
 var app = builder.Build();
 
 if (configureOpenRouter)
 {
     await using var scope = app.Services.CreateAsyncScope();
+
     var dbContext = scope.ServiceProvider.GetRequiredService<AiLifeOsDbContext>();
-    await OpenRouterSettingsConfigurator.ConfigureAsync(dbContext);
+    var apiKeyProtector = scope.ServiceProvider.GetRequiredService<OpenRouterApiKeyProtector>();
+
+    await OpenRouterSettingsConfigurator.ConfigureAsync(dbContext, apiKeyProtector);
     return;
 }
 
@@ -351,6 +360,7 @@ static async Task BootstrapAdminAsync(IServiceProvider services, string emailArg
             CreatedAtUtc = DateTime.UtcNow,
             IsAdmin = true,
             IsActive = true,
+            AccessRole = "SuperAdmin",
         };
         var createResult = await userManager.CreateAsync(user, password);
         if (!createResult.Succeeded)
@@ -361,8 +371,10 @@ static async Task BootstrapAdminAsync(IServiceProvider services, string emailArg
     }
     else
     {
+        const string accessRole = "SuperAdmin";
+        Guid? teamId = null;
         await dbContext.Database.ExecuteSqlInterpolatedAsync(
-            $"EXEC dbo.UserAdmin_SetAccess @UserId={user.Id}, @IsAdmin={true}, @IsActive={true}, @MustChangePassword={false}");
+            $"EXEC dbo.UserAdmin_SetAccess @UserId={user.Id}, @AccessRole={accessRole}, @IsActive={true}, @MustChangePassword={false}, @TeamId={teamId}");
     }
 
     await transaction.CommitAsync();

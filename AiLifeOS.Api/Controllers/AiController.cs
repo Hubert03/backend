@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Security.Claims;
 using AiLifeOS.Api.Services;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authorization;
@@ -13,6 +14,8 @@ namespace AiLifeOS.Api.Controllers;
 [Route("api/ai")]
 public sealed class AiController(
     OpenRouterPlanService planService,
+    KnowledgeAssistantService knowledgeAssistant,
+    DailyCopilotService copilot,
     IAntiforgery antiforgery) : ControllerBase
 {
     [HttpPost("plan")]
@@ -40,9 +43,9 @@ public sealed class AiController(
         var promptLength = request.Objective.Length
             + (request.Context?.Length ?? 0)
             + (request.Constraints?.Sum(item => item.Length) ?? 0);
-        if (promptLength > 2000)
+        if (promptLength > 6000)
         {
-            return BadRequest(new { message = "Objective, context, and constraints must total no more than 2,000 characters." });
+            return BadRequest(new { message = "Objective, context, and constraints must total no more than 6,000 characters." });
         }
 
         if (ContainsUnsupportedControlCharacters(request.Objective)
@@ -112,6 +115,109 @@ public sealed class AiController(
         }
     }
 
+    [HttpPost("ask-notes")]
+    public async Task<ActionResult<KnowledgeAnswerResponse>> AskNotes(
+        AskNotesRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!await HasValidCsrfTokenAsync())
+            return BadRequest(new { message = "Invalid or missing anti-forgery token." });
+
+        if (string.IsNullOrWhiteSpace(request.Question)
+            || request.Question.Any(character =>
+                char.IsControl(character) && character is not '\r' and not '\n' and not '\t'))
+            return BadRequest(new { message = "Enter a plain-text question." });
+
+        try
+        {
+            var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            return Ok(await knowledgeAssistant.AskAsync(
+                userId,
+                request.Question.Trim(),
+                cancellationToken));
+        }
+        catch (AiPlanConfigurationException exception)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = exception.Message });
+        }
+        catch (AiPlanProviderException exception)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                message = exception.FailureMessage ?? "The AI provider could not answer from your notes."
+            });
+        }
+        catch (HttpRequestException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                message = "The AI planning provider could not be reached."
+            });
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return StatusCode(StatusCodes.Status504GatewayTimeout, new
+            {
+                message = "The AI provider timed out. Try a shorter question."
+            });
+        }
+    }
+
+    [HttpPost("copilot")]
+    public async Task<ActionResult<DailyCopilotResponse>> CreateCopilotPlan(
+        DailyCopilotRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!await HasValidCsrfTokenAsync())
+            return BadRequest(new { message = "Invalid or missing anti-forgery token." });
+
+        if (request.Focus?.Length > 1000
+            || request.Focus?.Any(character =>
+                char.IsControl(character) && character is not '\r' and not '\n' and not '\t') == true)
+            return BadRequest(new { message = "Focus must be plain text and no more than 1,000 characters." });
+
+        try
+        {
+            if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+                return Unauthorized();
+
+            return Ok(await copilot.CreateAsync(
+                userId,
+                request.Focus,
+                cancellationToken));
+        }
+        catch (BriefingRateLimitException exception)
+        {
+            Response.Headers.RetryAfter = exception.RetryAfterSeconds.ToString();
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { message = exception.Message });
+        }
+        catch (AiPlanConfigurationException exception)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = exception.Message });
+        }
+        catch (AiPlanProviderException exception)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                message = exception.FailureMessage ?? "The AI provider could not create a daily plan."
+            });
+        }
+        catch (HttpRequestException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                message = "The AI planning provider could not be reached."
+            });
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return StatusCode(StatusCodes.Status504GatewayTimeout, new
+            {
+                message = "The AI provider timed out. Please try again."
+            });
+        }
+    }
+
     private async Task<bool> HasValidCsrfTokenAsync()
     {
         try
@@ -134,8 +240,14 @@ public sealed class AiController(
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CreatePlanRequest(
-    [Required, StringLength(1000, MinimumLength = 3)] string Objective,
+    [Required, StringLength(4000, MinimumLength = 3)] string Objective,
     [StringLength(10000)] string? Context,
     DateOnly? TargetDate,
     [MaxLength(20)] IReadOnlyList<string>? Constraints,
     [Required, RegularExpression("^(overview|tasks|goals|notes)$")] string Target);
+
+public sealed record AskNotesRequest(
+    [Required, StringLength(1500, MinimumLength = 3)] string Question);
+
+public sealed record DailyCopilotRequest(
+    [StringLength(1000)] string? Focus);

@@ -15,6 +15,9 @@ public sealed class ApplicationUserClaimsPrincipalFactory(
         identity.AddClaim(new Claim("is_admin", user.IsAdmin ? "true" : "false"));
         identity.AddClaim(new Claim("is_active", user.IsActive ? "true" : "false"));
         identity.AddClaim(new Claim("must_change_password", user.MustChangePassword ? "true" : "false"));
+        identity.AddClaim(new Claim("access_role", user.AccessRole));
+        if (user.TeamId is Guid teamId)
+            identity.AddClaim(new Claim("team_id", teamId.ToString()));
         return identity;
     }
 }

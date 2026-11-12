@@ -3,15 +3,19 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AiLifeOS.Api.Services;
 
+//public static class OpenRouterSettingsConfigurator
+//{
+//    public static async Task ConfigureAsync(AiLifeOsDbContext dbContext)
+//    {
 public static class OpenRouterSettingsConfigurator
 {
-    public static async Task ConfigureAsync(AiLifeOsDbContext dbContext)
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            throw new PlatformNotSupportedException(
-                "The local OpenRouter settings command uses Windows DPAPI and must run on Windows.");
-        }
+    public static async Task ConfigureAsync(AiLifeOsDbContext dbContext,OpenRouterApiKeyProtector apiKeyProtector)
+    { 
+        //if (!OperatingSystem.IsWindows())
+        //{
+        //    throw new PlatformNotSupportedException(
+        //        "The local OpenRouter settings command uses Windows DPAPI and must run on Windows.");
+        //}
 
         Console.Write($"OpenRouter API URL [{OpenRouterSettingsPolicy.DefaultApiUrl}]: ");
         var apiUrl = Console.ReadLine();
@@ -44,14 +48,14 @@ public static class OpenRouterSettingsConfigurator
             throw new InvalidOperationException("The API key cannot be empty.");
         }
 
-        var encryptedKey = OpenRouterSettingsPolicy.ProtectApiKey(apiKey);
+        var encryptedKey = apiKeyProtector.ProtectApiKey(apiKey);
 
         var updatedAtUtc = DateTime.UtcNow;
         await dbContext.Database.ExecuteSqlInterpolatedAsync(
             $"EXEC dbo.AiProviderSettings_Upsert @ApiUrl={apiUrl}, @Model={model}, @EncryptedApiKey={encryptedKey}, @UpdatedAtUtc={updatedAtUtc}");
 
         Console.WriteLine("OpenRouter settings saved to the AiLifeOS database.");
-        Console.WriteLine("The API key is encrypted with Windows DPAPI for the current Windows user.");
+        Console.WriteLine("The API key was encrypted using ASP.NET Core Data Protection.");
     }
 
     private static string ReadHidden(string prompt)
